@@ -143,6 +143,13 @@ class PinEntryController(
     var failedAttempts by mutableStateOf(preferences.getInt("pin-failed-attempts", 0))
     var lockedUntil by mutableStateOf(preferences.getLong("pin-locked-until", 0L))
     private val useBiometrics = preferences.getBoolean("biometrics", true)
+    val canUseBiometrics: Boolean
+        get() = !isCreatingPin && useBiometrics &&
+            (context as? FragmentActivity)?.let { activity ->
+                BiometricManager.from(activity).canAuthenticate(
+                    BiometricManager.Authenticators.BIOMETRIC_STRONG
+                ) == BiometricManager.BIOMETRIC_SUCCESS
+            } == true
 
     /**
      * Read fresh on every call: the lock-timeout dropdown can be changed while this controller is
@@ -1302,9 +1309,14 @@ private fun PinKeypad(
     onDigit: (String) -> Unit,
     onBiometric: () -> Unit,
     onDelete: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    showBiometric: Boolean = true
 ) {
-    val keys = listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "fingerprint", "0", "delete")
+    val keys = listOf(
+        "1", "2", "3", "4", "5", "6", "7", "8", "9",
+        if (showBiometric) "fingerprint" else "blank",
+        "0", "delete"
+    )
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(PocketSpace.sm)
@@ -1318,9 +1330,12 @@ private fun PinKeypad(
                     val label = when (value) {
                         "fingerprint" -> "Use biometric unlock"
                         "delete" -> "Delete last digit"
+                        "blank" -> ""
                         else -> value
                     }
-                    Box(Modifier.weight(1f).pressScale(0.9f)) {
+                    if (value == "blank") {
+                        Spacer(Modifier.weight(1f).height(54.dp))
+                    } else Box(Modifier.weight(1f).pressScale(0.9f)) {
                         Surface(
                             onClick = {
                                 when (value) {
@@ -1725,7 +1740,8 @@ fun PinGateDialog(
                 PinKeypad(
                     onDigit = { pinController.acceptDigit(it) },
                     onBiometric = { pinController.onBiometricClick() },
-                    onDelete = { pinController.onDeleteClick() }
+                    onDelete = { pinController.onDeleteClick() },
+                    showBiometric = pinController.canUseBiometrics
                 )
             }
         }
