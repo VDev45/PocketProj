@@ -114,6 +114,21 @@ internal fun isHiddenSessionValid(expiry: Long, now: Long): Boolean =
 internal fun sessionSurvivesRestart(expiry: Long, now: Long): Boolean =
     expiry != FOREGROUND_SESSION && expiry > now
 
+/** Outcomes for the two-entry first-time PIN setup flow. */
+internal enum class PinSetupResult {
+    NEEDS_CONFIRMATION,
+    MISMATCH,
+    MATCH
+}
+
+/** Pure decision logic so the confirmation flow can be covered by local unit tests. */
+internal fun evaluatePinSetup(firstEntry: String?, confirmation: String): PinSetupResult =
+    when {
+        firstEntry == null -> PinSetupResult.NEEDS_CONFIRMATION
+        firstEntry == confirmation -> PinSetupResult.MATCH
+        else -> PinSetupResult.MISMATCH
+    }
+
 /**
  * Encapsulates PIN entry logic: accept digits, biometric, lockout, session creation.
  * Used by both PrivacySecurityScreen and PinGateDialog to avoid duplication.
@@ -192,29 +207,33 @@ class PinEntryController(
         pinMessage = null
         if (updated.length == 4) {
             if (isCreatingPin) {
-                if (setupStep == 1) {
-                    // Do not persist an unconfirmed PIN. Keep it only for this setup session.
-                    pendingSetupPin = updated
-                    setupStep = 2
-                    pin = ""
-                    pinMessage = "Now enter the same PIN to confirm it."
-                } else if (updated == pendingSetupPin) {
-                    protectedPin = protectPinVerifier(updated)
-                    preferences.edit()
-                        .putString("pin-verifier", protectedPin)
-                        .putInt("pin-failed-attempts", 0)
-                        .putLong("pin-locked-until", 0L)
-                        .apply()
-                    pendingSetupPin = null
-                    pin = ""
-                    pinVerified = true
-                    pinMessage = "Your locker is secured."
-                    Toast.makeText(context, "Hidden Locker secured", Toast.LENGTH_SHORT).show()
-                    completeVerification()
-                } else {
-                    pin = ""
-                    pinVerified = false
-                    pinMessage = "Those PINs don't match. Try again."
+                when (evaluatePinSetup(pendingSetupPin, updated)) {
+                    PinSetupResult.NEEDS_CONFIRMATION -> {
+                        // Do not persist an unconfirmed PIN. Keep it only for this setup session.
+                        pendingSetupPin = updated
+                        setupStep = 2
+                        pin = ""
+                        pinMessage = "Now enter the same PIN to confirm it."
+                    }
+                    PinSetupResult.MATCH -> {
+                        protectedPin = protectPinVerifier(updated)
+                        preferences.edit()
+                            .putString("pin-verifier", protectedPin)
+                            .putInt("pin-failed-attempts", 0)
+                            .putLong("pin-locked-until", 0L)
+                            .apply()
+                        pendingSetupPin = null
+                        pin = ""
+                        pinVerified = true
+                        pinMessage = "Your locker is secured."
+                        Toast.makeText(context, "Hidden Locker secured", Toast.LENGTH_SHORT).show()
+                        completeVerification()
+                    }
+                    PinSetupResult.MISMATCH -> {
+                        pin = ""
+                        pinVerified = false
+                        pinMessage = "Those PINs don't match. Try again."
+                    }
                 }
             } else {
                 val valid = if (protectedPin != null) {
