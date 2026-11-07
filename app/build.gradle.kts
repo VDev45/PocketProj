@@ -24,6 +24,7 @@ android {
         applicationId = "com.vishwaravi.pocketproj"
         minSdk = 26
         targetSdk = 35
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // Sourced from gradle.properties. Deliberately not defaulted: a missing
         // or malformed value must fail the build rather than silently shipping
         // an APK whose versionCode has not moved, which Android will refuse to
@@ -83,4 +84,6 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.biometric:biometric:1.2.0-alpha05")
     testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }
