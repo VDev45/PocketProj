@@ -1137,7 +1137,8 @@ fun PrivacySecurityScreen(onBack: () -> Unit, onOpenHidden: () -> Unit) {
                     PinKeypad(
                         onDigit = { pinController.acceptDigit(it) },
                         onBiometric = { pinController.onBiometricClick() },
-                        onDelete = { pinController.onDeleteClick() }
+                        onDelete = { pinController.onDeleteClick() },
+                        showBiometric = pinController.canUseBiometrics
                     )
 
                     if (System.currentTimeMillis() < pinController.lockedUntil) {
