@@ -122,6 +122,13 @@ class UpdateManager(private val context: Context) {
     }
 
     companion object {
-        private const val LATEST_RELEASE_API = "https://api.github.com/repos/vishwaravi/pocket-proj/releases/latest"
+        /**
+         * The repository the release workflow publishes to. It must be the same one
+         * `.github/workflows/android-build-release.yml` creates releases in: a mismatch makes every
+         * check fail with GitHub's 404, which the settings screen can only report as "Could not
+         * check for updates".
+         */
+        internal const val LATEST_RELEASE_API =
+            "https://api.github.com/repos/VDev45/PocketProj/releases/latest"
     }
 }

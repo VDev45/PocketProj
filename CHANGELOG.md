@@ -9,6 +9,19 @@ The version in each heading is the `versionName` in `gradle.properties`. That fi
 is the single source of truth: the release workflow reads it to title the GitHub
 release, and fails the build if the APK it produced does not match it.
 
+## [0.3.7] - 2026-11-07
+
+### Fixed
+
+- **"Check for updates" never found anything.** The check queried
+  `vishwaravi/pocket-proj`, which the releases no longer come from, so
+  GitHub answered 404 and the settings screen could only report
+  "Could not check for updates". It now queries the repository the
+  workflow actually publishes to. Nothing else about the check changed:
+  it still reads the version line out of the release body, still stays
+  silent when the published `versionCode` is not newer than the installed
+  one, and still downloads the release's `.apk` asset.
+
 ## [0.3.6] - 2026-09-27
 
 ### Fixed

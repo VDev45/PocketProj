@@ -92,4 +92,14 @@ class UpdateManagerTest {
         // "What's changed in 0.3.0" must not be mistaken for the version line.
         assertNull(parseReleaseVersion("## What's changed in 0.3.0"))
     }
+
+    @Test
+    fun checksTheRepositoryThatActuallyPublishesReleases() {
+        // The regression: the endpoint still named the pre-migration repo, which 404s, so every
+        // check reported "Could not check for updates" instead of finding a release.
+        assertEquals(
+            "https://api.github.com/repos/VDev45/PocketProj/releases/latest",
+            UpdateManager.LATEST_RELEASE_API
+        )
+    }
 }
