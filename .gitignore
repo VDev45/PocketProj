@@ -1,0 +1,17 @@
+# Release signing credentials — never commit these
+*.jks
+*.jks.b64
+*.keystore
+*.bks
+
+# Gradle / Android build outputs
+.gradle/
+build/
+app/build/
+.kotlin/
+
+# Local IDE and OS files
+local.properties
+.idea/
+*.iml
+.DS_Store
