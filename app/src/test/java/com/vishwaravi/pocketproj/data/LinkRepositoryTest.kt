@@ -637,6 +637,36 @@ class LinkRepositoryTest {
     }
 
     @Test
+    fun clearAllData_deletesEncryptedLockerNotes() = runBlocking {
+        val dao = FakeLinkDao(initial = listOf(LinkEntity(id = 1, url = "https://example.com/article", collectionId = 1)))
+        val collectionDao = FakeCollectionDao(listOf(CollectionEntity(id = 1, name = "Inbox")))
+        val lockerNoteDao = FakeLockerNoteDao(
+            listOf(
+                LockerNoteEntity(
+                    id = "note-1",
+                    formatVersion = 1,
+                    contentIv = ByteArray(12),
+                    ciphertext = byteArrayOf(1),
+                    wrappedKeyIv = ByteArray(12),
+                    wrappedDataKey = byteArrayOf(2),
+                    createdAt = 1L,
+                    updatedAt = 1L
+                )
+            )
+        )
+        val repository = LinkRepository(
+            dao = dao,
+            collectionDao = collectionDao,
+            lockerNoteDao = lockerNoteDao
+        )
+
+        assertTrue(repository.clearAllData().isSuccess)
+
+        // Hidden notes are the most sensitive rows in the database; a wipe that spares them is not a wipe.
+        assertTrue(lockerNoteDao.notes.value.isEmpty())
+    }
+
+    @Test
     fun deleteCollection_runsInsideSingleTransaction() = runBlocking {
         val linkDao = FakeLinkDao(listOf(LinkEntity(id = 1, url = "https://a.example", collectionId = 2)))
         val collectionDao = FakeCollectionDao(
@@ -779,6 +809,46 @@ class LinkRepositoryTest {
         override suspend fun deleteAll(): Int {
             val before = items.value.size
             items.value = emptyList()
+            return before
+        }
+    }
+
+    private class FakeLockerNoteDao(
+        initial: List<LockerNoteEntity> = emptyList()
+    ) : LockerNoteDao {
+        val notes = MutableStateFlow(initial)
+
+        override fun observeAll(): Flow<List<LockerNoteEntity>> = notes
+
+        override suspend fun findById(id: String): LockerNoteEntity? =
+            notes.value.firstOrNull { it.id == id }
+
+        override suspend fun insert(note: LockerNoteEntity) {
+            notes.value = notes.value + note
+        }
+
+        override suspend fun update(note: LockerNoteEntity): Int {
+            var updated = 0
+            notes.value = notes.value.map {
+                if (it.id == note.id) {
+                    updated++
+                    note
+                } else {
+                    it
+                }
+            }
+            return updated
+        }
+
+        override suspend fun deleteById(id: String): Int {
+            val before = notes.value.size
+            notes.value = notes.value.filterNot { it.id == id }
+            return before - notes.value.size
+        }
+
+        override suspend fun deleteAll(): Int {
+            val before = notes.value.size
+            notes.value = emptyList()
             return before
         }
     }
