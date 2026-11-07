@@ -19,14 +19,15 @@ class Converters {
 }
 
 @Database(
-    entities = [LinkEntity::class, CollectionEntity::class],
-    version = 6,
+    entities = [LinkEntity::class, CollectionEntity::class, LockerNoteEntity::class],
+    version = 7,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
 abstract class PocketDatabase : RoomDatabase() {
     abstract fun linkDao(): LinkDao
     abstract fun collectionDao(): CollectionDao
+    abstract fun lockerNoteDao(): LockerNoteDao
 
     companion object {
         private val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -159,6 +160,29 @@ abstract class PocketDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v7 introduces a separate encrypted-note table. Existing links and collections are
+         * untouched; there is no plaintext backfill because notes did not previously exist.
+         */
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS locker_notes (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        formatVersion INTEGER NOT NULL,
+                        contentIv BLOB NOT NULL,
+                        ciphertext BLOB NOT NULL,
+                        wrappedKeyIv BLOB NOT NULL,
+                        wrappedDataKey BLOB NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        updatedAt INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
         @Volatile private var INSTANCE: PocketDatabase? = null
 
         fun get(context: Context): PocketDatabase =
@@ -168,7 +192,7 @@ abstract class PocketDatabase : RoomDatabase() {
                     PocketDatabase::class.java,
                     "pocket_proj.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                     .build()
                     .also { INSTANCE = it }
             }
