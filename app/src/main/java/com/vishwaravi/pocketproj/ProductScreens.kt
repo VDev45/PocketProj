@@ -114,6 +114,21 @@ internal fun isHiddenSessionValid(expiry: Long, now: Long): Boolean =
 internal fun sessionSurvivesRestart(expiry: Long, now: Long): Boolean =
     expiry != FOREGROUND_SESSION && expiry > now
 
+/** Outcomes for the two-entry first-time PIN setup flow. */
+internal enum class PinSetupResult {
+    NEEDS_CONFIRMATION,
+    MISMATCH,
+    MATCH
+}
+
+/** Pure decision logic so the confirmation flow can be covered by local unit tests. */
+internal fun evaluatePinSetup(firstEntry: String?, confirmation: String): PinSetupResult =
+    when {
+        firstEntry == null -> PinSetupResult.NEEDS_CONFIRMATION
+        firstEntry == confirmation -> PinSetupResult.MATCH
+        else -> PinSetupResult.MISMATCH
+    }
+
 /**
  * Encapsulates PIN entry logic: accept digits, biometric, lockout, session creation.
  * Used by both PrivacySecurityScreen and PinGateDialog to avoid duplication.
@@ -135,9 +150,21 @@ class PinEntryController(
     var pin by mutableStateOf("")
     var pinMessage: String? by mutableStateOf(null)
     var pinVerified by mutableStateOf(false)
+    /** First entry stays in memory only until the user confirms it. */
+    private var pendingSetupPin: String? = null
+    var setupStep by mutableStateOf(1)
+    val isCreatingPin: Boolean
+        get() = protectedPin == null && legacyPinHash == null
     var failedAttempts by mutableStateOf(preferences.getInt("pin-failed-attempts", 0))
     var lockedUntil by mutableStateOf(preferences.getLong("pin-locked-until", 0L))
     private val useBiometrics = preferences.getBoolean("biometrics", true)
+    val canUseBiometrics: Boolean
+        get() = !isCreatingPin && useBiometrics &&
+            (context as? FragmentActivity)?.let { activity ->
+                BiometricManager.from(activity).canAuthenticate(
+                    BiometricManager.Authenticators.BIOMETRIC_STRONG
+                ) == BiometricManager.BIOMETRIC_SUCCESS
+            } == true
 
     /**
      * Read fresh on every call: the lock-timeout dropdown can be changed while this controller is
@@ -173,23 +200,41 @@ class PinEntryController(
     }
 
     fun acceptDigit(digit: String) {
+        if (digit.length != 1 || digit[0] !in '0'..'9') return
         if (pin.length >= 4 || System.currentTimeMillis() < lockedUntil) return
         val updated = pin + digit
         pin = updated
         pinMessage = null
         if (updated.length == 4) {
-            if (protectedPin == null && legacyPinHash == null) {
-                protectedPin = protectPinVerifier(updated)
-                preferences.edit()
-                    .putString("pin-verifier", protectedPin)
-                    .putInt("pin-failed-attempts", 0)
-                    .putLong("pin-locked-until", 0L)
-                    .apply()
-                pin = ""
-                pinVerified = true
-                pinMessage = "Security PIN created"
-                Toast.makeText(context, "PIN created", Toast.LENGTH_SHORT).show()
-                completeVerification()
+            if (isCreatingPin) {
+                when (evaluatePinSetup(pendingSetupPin, updated)) {
+                    PinSetupResult.NEEDS_CONFIRMATION -> {
+                        // Do not persist an unconfirmed PIN. Keep it only for this setup session.
+                        pendingSetupPin = updated
+                        setupStep = 2
+                        pin = ""
+                        pinMessage = "Now enter the same PIN to confirm it."
+                    }
+                    PinSetupResult.MATCH -> {
+                        protectedPin = protectPinVerifier(updated)
+                        preferences.edit()
+                            .putString("pin-verifier", protectedPin)
+                            .putInt("pin-failed-attempts", 0)
+                            .putLong("pin-locked-until", 0L)
+                            .apply()
+                        pendingSetupPin = null
+                        pin = ""
+                        pinVerified = true
+                        pinMessage = "Your locker is secured."
+                        Toast.makeText(context, "Hidden Locker secured", Toast.LENGTH_SHORT).show()
+                        completeVerification()
+                    }
+                    PinSetupResult.MISMATCH -> {
+                        pin = ""
+                        pinVerified = false
+                        pinMessage = "Those PINs don't match. Try again."
+                    }
+                }
             } else {
                 val valid = if (protectedPin != null) {
                     verifyProtectedPin(updated, protectedPin.orEmpty())
@@ -235,7 +280,9 @@ class PinEntryController(
     }
 
     fun onBiometricClick() {
-        if (!useBiometrics) {
+        if (isCreatingPin) {
+            pinMessage = "Create and confirm a PIN before using biometric unlock."
+        } else if (!useBiometrics) {
             pinMessage = "Biometric unlock is disabled"
         } else if (protectedPin == null && legacyPinHash == null) {
             pinMessage = "Create a PIN before using biometric unlock"
@@ -1081,9 +1128,23 @@ fun PrivacySecurityScreen(onBack: () -> Unit, onOpenHidden: () -> Unit) {
                             PocketLockGlyph(tint = PocketColors.Accent)
                         }
                         Text(
-                            if (creating) "Create a PIN" else "Enter your PIN",
+                            when {
+                                creating && pinController.setupStep == 2 -> "Confirm your PIN"
+                                creating -> "Secure your locker"
+                                else -> "Enter your PIN"
+                            },
                             style = PocketType.title,
                             color = PocketColors.Ink
+                        )
+                    }
+                    if (creating) {
+                        Text(
+                            if (pinController.setupStep == 1)
+                                "Create a 4-digit PIN to protect your private links."
+                            else
+                                "Step 2 of 2 · Enter the same PIN again.",
+                            style = PocketType.caption,
+                            color = PocketColors.InkMuted
                         )
                     }
 
@@ -1095,7 +1156,8 @@ fun PrivacySecurityScreen(onBack: () -> Unit, onOpenHidden: () -> Unit) {
                     PinKeypad(
                         onDigit = { pinController.acceptDigit(it) },
                         onBiometric = { pinController.onBiometricClick() },
-                        onDelete = { pinController.onDeleteClick() }
+                        onDelete = { pinController.onDeleteClick() },
+                        showBiometric = pinController.canUseBiometrics
                     )
 
                     if (System.currentTimeMillis() < pinController.lockedUntil) {
@@ -1267,9 +1329,14 @@ private fun PinKeypad(
     onDigit: (String) -> Unit,
     onBiometric: () -> Unit,
     onDelete: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    showBiometric: Boolean = true
 ) {
-    val keys = listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "fingerprint", "0", "delete")
+    val keys = listOf(
+        "1", "2", "3", "4", "5", "6", "7", "8", "9",
+        if (showBiometric) "fingerprint" else "blank",
+        "0", "delete"
+    )
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(PocketSpace.sm)
@@ -1283,9 +1350,12 @@ private fun PinKeypad(
                     val label = when (value) {
                         "fingerprint" -> "Use biometric unlock"
                         "delete" -> "Delete last digit"
+                        "blank" -> ""
                         else -> value
                     }
-                    Box(Modifier.weight(1f).pressScale(0.9f)) {
+                    if (value == "blank") {
+                        Spacer(Modifier.weight(1f).height(54.dp))
+                    } else Box(Modifier.weight(1f).pressScale(0.9f)) {
                         Surface(
                             onClick = {
                                 when (value) {
@@ -1619,12 +1689,23 @@ fun PinGateDialog(
                     }
                     Spacer(Modifier.width(PocketSpace.md))
                     Column(Modifier.weight(1f)) {
-                        Text(title, style = PocketType.title, color = PocketColors.Ink)
                         Text(
                             when {
+                                creating && pinController.setupStep == 2 -> "Confirm your PIN"
+                                creating && title == "Hidden locker" -> "Secure your locker"
+                                else -> title
+                            },
+                            style = PocketType.title,
+                            color = PocketColors.Ink
+                        )
+                        Text(
+                            when {
+                                creating && pinController.setupStep == 1 ->
+                                    "Create a 4-digit PIN to protect your private links."
+                                creating && pinController.setupStep == 2 ->
+                                    "Step 2 of 2 · Enter the same PIN again."
                                 title != "Hidden locker" -> "Enter your PIN to continue"
-                                creating -> "Choose a 4-digit PIN"
-                                else -> "Enter your PIN to continue"
+                                else -> "Enter your PIN to unlock your private links."
                             },
                             style = PocketType.caption,
                             color = PocketColors.InkMuted
@@ -1649,6 +1730,14 @@ fun PinGateDialog(
                     }
                 }
 
+                if (creating) {
+                    Text(
+                        if (pinController.setupStep == 1) "STEP 1 OF 2" else "STEP 2 OF 2",
+                        style = PocketType.overline,
+                        color = PocketColors.InkMuted,
+                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                    )
+                }
                 PinDots(
                     entered = pinController.pin.length,
                     verified = pinController.pinVerified,
@@ -1671,7 +1760,8 @@ fun PinGateDialog(
                 PinKeypad(
                     onDigit = { pinController.acceptDigit(it) },
                     onBiometric = { pinController.onBiometricClick() },
-                    onDelete = { pinController.onDeleteClick() }
+                    onDelete = { pinController.onDeleteClick() },
+                    showBiometric = pinController.canUseBiometrics
                 )
             }
         }
