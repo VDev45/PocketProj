@@ -200,6 +200,12 @@ fun PocketAppRoot(repository: LinkRepository, sharedText: String?) {
     var updateChecking by remember { mutableStateOf(false) }
     var updateDownloading by remember { mutableStateOf(false) }
     var updateError by remember { mutableStateOf<String?>(null) }
+    // Dismissal is per release, and it outlives the process: re-showing a banner the user just
+    // closed, on the next launch, is nagging rather than informing. A newer release has a different
+    // versionCode and shows again.
+    var dismissedUpdateCode by rememberSaveable {
+        mutableLongStateOf(preferences.getLong("dismissed-update-code", -1L))
+    }
     val lifecycleOwner = LocalLifecycleOwner.current
 
     fun securityTimeoutMillis(): Long = when (securityPreferences.getString("lock-timeout", "1 minute")) {
@@ -280,6 +286,30 @@ fun PocketAppRoot(repository: LinkRepository, sharedText: String?) {
         vm.clearMessages()
     }
 
+    /**
+     * One path for both the library banner and the Settings card, so the two entry points cannot
+     * drift. Failures toast as well as setting [updateError], because the Settings card — where that
+     * error is rendered — is not on screen when the download starts from the library.
+     */
+    fun installUpdate() {
+        val update = availableUpdate ?: return
+        if (!updateManager.canInstallUnknownSources()) {
+            updateManager.openInstallPermissionSettings()
+            return
+        }
+        updateDownloading = true
+        updateError = null
+        updateScope.launch {
+            updateManager.downloadAndInstall(update)
+                .onFailure {
+                    val message = it.message ?: "Update failed"
+                    updateError = message
+                    Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                }
+            updateDownloading = false
+        }
+    }
+
     androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
@@ -317,6 +347,13 @@ fun PocketAppRoot(repository: LinkRepository, sharedText: String?) {
 
     LaunchedEffect(sharedText) {
         if (!sharedText.isNullOrBlank()) openAdd(sharedText)
+    }
+
+    // One check at launch, because the banner's whole purpose is to reach people who never open
+    // Settings. Failures are swallowed here on purpose: a user who did not ask for an update check
+    // should not get a network error on their library. The Settings card is where that belongs.
+    LaunchedEffect(Unit) {
+        updateManager.checkForUpdate().onSuccess { availableUpdate = it }
     }
 
     LaunchedEffect(route) {
@@ -434,6 +471,13 @@ fun PocketAppRoot(repository: LinkRepository, sharedText: String?) {
                         collectionMenu = fullCollectionMenu,
                         collectionNameById = namesById,
                         isGrid = libraryGrid,
+                        update = availableUpdate?.takeIf { it.versionCode != dismissedUpdateCode },
+                        updateDownloading = updateDownloading,
+                        onUpdate = { installUpdate() },
+                        onDismissUpdate = { update ->
+                            dismissedUpdateCode = update.versionCode
+                            preferences.edit().putLong("dismissed-update-code", update.versionCode).apply()
+                        },
                         onCollectionSelected = { selected ->
                             if (selected == ALL_LINKS_LABEL) {
                                 showAllLinks = true
@@ -626,22 +670,7 @@ fun PocketAppRoot(repository: LinkRepository, sharedText: String?) {
                                 updateChecking = false
                             }
                         },
-                        onUpdate = {
-                            val update = availableUpdate
-                            if (update != null) {
-                                if (!updateManager.canInstallUnknownSources()) {
-                                    updateManager.openInstallPermissionSettings()
-                                } else {
-                                    updateDownloading = true
-                                    updateError = null
-                                    updateScope.launch {
-                                        updateManager.downloadAndInstall(update)
-                                            .onFailure { updateError = it.message ?: "Update failed" }
-                                        updateDownloading = false
-                                    }
-                                }
-                            }
-                        },
+                        onUpdate = { installUpdate() },
                         onAllowInstall = updateManager::openInstallPermissionSettings
                     )
                     AppDestination.PRIVACY -> PrivacySecurityScreen(
@@ -857,6 +886,63 @@ fun PocketAppRoot(repository: LinkRepository, sharedText: String?) {
    Library
    ═══════════════════════════════════════════════════════════════════════════ */
 
+/**
+ * Library-level "an update exists" notice.
+ *
+ * Deliberately not a dialog: saving a link is the app's main job and nothing here should stand
+ * between the user and it. It names the release, can be dismissed for that release only, and keeps
+ * the Settings card as the place that reports the check's state — including failures.
+ */
+@Composable
+private fun UpdateBanner(
+    update: AppUpdate,
+    downloading: Boolean,
+    onUpdate: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = PocketShape.lg,
+        color = PocketColors.AccentSoft
+    ) {
+        Row(
+            modifier = Modifier.padding(start = PocketSpace.md, end = PocketSpace.xs, top = PocketSpace.xs, bottom = PocketSpace.xs),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(PocketSpace.sm)
+        ) {
+            PocketIconBadge(
+                icon = Icons.Filled.Refresh,
+                accent = PocketColors.Accent,
+                size = 36.dp
+            )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    if (downloading) "Downloading ${update.versionName}…" else "Voket ${update.versionName} is available",
+                    style = PocketType.label,
+                    color = PocketColors.OnAccentSoft,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    if (downloading) "This may take a moment" else "Your links are kept when you update",
+                    style = PocketType.caption,
+                    color = PocketColors.OnAccentSoft.copy(alpha = 0.78f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            PocketCompactButton(text = if (downloading) "Downloading" else "Update", onClick = onUpdate, enabled = !downloading)
+            PocketRoundAction(
+                icon = Icons.Filled.Close,
+                contentDescription = "Dismiss update notice",
+                onClick = onDismiss,
+                size = 36.dp,
+                tint = PocketColors.OnAccentSoft
+            )
+        }
+    }
+}
+
 @Composable
 private fun LibraryScreen(
     links: List<LinkEntity>,
@@ -865,6 +951,10 @@ private fun LibraryScreen(
     collectionMenu: List<String>,
     collectionNameById: Map<Long, String>,
     isGrid: Boolean,
+    update: AppUpdate?,
+    updateDownloading: Boolean,
+    onUpdate: () -> Unit,
+    onDismissUpdate: (AppUpdate) -> Unit,
     onCollectionSelected: (String) -> Unit,
     onCreateCollection: () -> Unit,
     onManageCollections: () -> Unit,
@@ -890,6 +980,16 @@ private fun LibraryScreen(
                 onProfile = onProfile,
                 onOpenVault = onOpenVault
             )
+
+            if (update != null) {
+                Spacer(Modifier.height(PocketSpace.sm))
+                UpdateBanner(
+                    update = update,
+                    downloading = updateDownloading,
+                    onUpdate = onUpdate,
+                    onDismiss = { onDismissUpdate(update) }
+                )
+            }
 
             Spacer(Modifier.height(PocketSpace.sm))
 
