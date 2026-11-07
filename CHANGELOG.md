@@ -9,6 +9,19 @@ The version in each heading is the `versionName` in `gradle.properties`. That fi
 is the single source of truth: the release workflow reads it to title the GitHub
 release, and fails the build if the APK it produced does not match it.
 
+## [0.3.8] - 2026-11-07
+
+### Added
+
+- **A dismissible "Voket 0.3.8 is available" banner on the library**, so an
+  update is visible without opening Settings first. The app now checks for a
+  newer release once at launch, in the background; a failure stays silent
+  there because the Settings card is still the place that reports it.
+  Dismissing the banner remembers the release it named, so the same version
+  does not reappear on the next launch, while a newer one does. Tapping
+  **Update** downloads and hands the APK to Android's installer, exactly as
+  the Settings card does — both entry points now share one code path.
+
 ## [0.3.7] - 2026-11-07
 
 ### Fixed
