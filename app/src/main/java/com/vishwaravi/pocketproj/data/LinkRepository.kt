@@ -54,7 +54,9 @@ class LinkRepository(
     private val fetcher: MetadataFetcher = HttpMetadataFetcher(),
     private val transactionRunner: TransactionRunner = TransactionRunner { block -> block() },
     private val enqueuer: MetadataEnqueuer = MetadataEnqueuer { _, _ -> },
-    private val hiddenTagsProvider: () -> Set<String> = { emptySet() }
+    private val hiddenTagsProvider: () -> Set<String> = { emptySet() },
+    /** Absent in fakes that predate locker notes; "clear all data" then has no notes to clear. */
+    private val lockerNoteDao: LockerNoteDao? = null
 ) {
     companion object {
         const val INBOX_COLLECTION = "Inbox"
@@ -268,6 +270,9 @@ class LinkRepository(
         transactionRunner.run {
             dao.deleteAll()
             collectionDao?.deleteAll()
+            // Hidden notes are the most sensitive rows in the database; "clear all data" that left
+            // them behind would be a promise the app does not keep.
+            lockerNoteDao?.deleteAll()
             ensureInboxCollection()
         }
     }

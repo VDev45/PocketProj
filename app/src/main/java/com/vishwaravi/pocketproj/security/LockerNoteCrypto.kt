@@ -85,10 +85,16 @@ class LockerNoteCrypto(
         require(encryptedNote.contentIv.size == GCM_IV_SIZE_BYTES) { "Invalid content IV" }
         require(encryptedNote.wrappedKeyIv.size == GCM_IV_SIZE_BYTES) { "Invalid wrapped-key IV" }
 
+        // Never generate here. A wrapping key that has gone missing is an unrecoverable state for
+        // the notes it wrapped; quietly minting a replacement would leave them undecryptable while
+        // making the failure look like ordinary corruption on the next read.
+        val wrappingKey = existingWrappingKey() ?: throw IllegalStateException(
+            "Hidden Locker notes key is missing; the notes it wrapped cannot be decrypted"
+        )
         val wrappingCipher = Cipher.getInstance(TRANSFORMATION)
         wrappingCipher.init(
             Cipher.DECRYPT_MODE,
-            getOrCreateWrappingKey(),
+            wrappingKey,
             GCMParameterSpec(GCM_TAG_SIZE_BITS, encryptedNote.wrappedKeyIv)
         )
         wrappingCipher.updateAAD(noteId.toByteArray(StandardCharsets.UTF_8))
@@ -110,9 +116,18 @@ class LockerNoteCrypto(
         }
     }
 
-    private fun getOrCreateWrappingKey(): SecretKey {
-        val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-        (keyStore.getKey(keyAlias, null) as? SecretKey)?.let { return it }
+    private fun existingWrappingKey(): SecretKey? =
+        KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+            .getKey(keyAlias, null) as? SecretKey
+
+    /**
+     * Serialized on a process-wide lock. Two first-use callers racing here would each see no key and
+     * each generate one for the same alias; the second replaces the first, and every note wrapped by
+     * the losing key becomes permanently unreadable. The lock is not an instance field because
+     * nothing guarantees a single [LockerNoteCrypto] per process.
+     */
+    private fun getOrCreateWrappingKey(): SecretKey = synchronized(WRAPPING_KEY_LOCK) {
+        existingWrappingKey()?.let { return it }
 
         val generator = KeyGenerator.getInstance(
             KeyProperties.KEY_ALGORITHM_AES,
@@ -129,7 +144,7 @@ class LockerNoteCrypto(
                 .setRandomizedEncryptionRequired(true)
                 .build()
         )
-        return generator.generateKey()
+        generator.generateKey()
     }
 
     companion object {
@@ -141,5 +156,7 @@ class LockerNoteCrypto(
         private const val DATA_KEY_SIZE_BYTES = KEY_SIZE_BITS / 8
         private const val GCM_TAG_SIZE_BITS = 128
         private const val GCM_IV_SIZE_BYTES = 12
+
+        private val WRAPPING_KEY_LOCK = Any()
     }
 }

@@ -183,6 +183,15 @@ abstract class PocketDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Every hand-written migration, in order. Exposed so tests can open a real database at an
+         * older version and assert it still upgrades (there is no exported schema to test against,
+         * because `exportSchema = false`).
+         */
+        val MIGRATIONS: Array<Migration> = arrayOf(
+            MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7
+        )
+
         @Volatile private var INSTANCE: PocketDatabase? = null
 
         fun get(context: Context): PocketDatabase =
@@ -192,7 +201,7 @@ abstract class PocketDatabase : RoomDatabase() {
                     PocketDatabase::class.java,
                     "pocket_proj.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+                    .addMigrations(*MIGRATIONS)
                     .build()
                     .also { INSTANCE = it }
             }

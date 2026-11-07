@@ -1,9 +1,9 @@
 package com.vishwaravi.pocketproj.security
 
-import android.security.keystore.KeyStoreException
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertThrows
 import org.junit.Before
@@ -89,6 +89,26 @@ class LockerNoteCryptoTest {
         val recreated = LockerNoteCrypto(keyAlias = alias)
 
         assertEquals("survives process recreation", recreated.decrypt("note-1", encrypted))
+    }
+
+    @Test
+    fun decryptWithMissingKeyFailsInsteadOfGeneratingOne() {
+        // A fresh alias has no Keystore entry. Decrypting must report that plainly and must not mint
+        // a replacement key: doing so would make every note wrapped by the lost key undecryptable
+        // while looking like ordinary corruption.
+        val envelope = EncryptedNote(
+            contentIv = ByteArray(12),
+            ciphertext = byteArrayOf(1, 2, 3),
+            wrappedKeyIv = ByteArray(12),
+            wrappedDataKey = byteArrayOf(4, 5, 6)
+        )
+
+        assertThrows(IllegalStateException::class.java) {
+            crypto.decrypt("note-1", envelope)
+        }
+        assertFalse(
+            KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.containsAlias(alias)
+        )
     }
 
     @Test

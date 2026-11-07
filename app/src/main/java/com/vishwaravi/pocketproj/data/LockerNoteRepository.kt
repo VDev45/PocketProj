@@ -2,7 +2,9 @@ package com.vishwaravi.pocketproj.data
 
 import com.vishwaravi.pocketproj.security.EncryptedNote
 import com.vishwaravi.pocketproj.security.LockerNoteCrypto
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import org.json.JSONObject
 import java.util.UUID
@@ -28,7 +30,11 @@ class LockerNoteRepository(
     private val now: () -> Long = System::currentTimeMillis
 ) {
     fun observeAll(): Flow<List<LockerNote>> =
-        dao.observeAll().map { rows -> rows.map(::decrypt) }
+        dao.observeAll()
+            .map { rows -> rows.map(::decrypt) }
+            // Each emission decrypts every note; doing that on the collector's context would put it
+            // on the frame thread for a Compose screen.
+            .flowOn(Dispatchers.Default)
 
     suspend fun get(id: String): LockerNote? =
         dao.findById(id)?.let(::decrypt)
@@ -42,7 +48,7 @@ class LockerNoteRepository(
             createdAt = timestamp,
             updatedAt = timestamp
         )
-        persist(note)
+        dao.insert(encrypt(note))
         return note
     }
 
@@ -56,29 +62,29 @@ class LockerNoteRepository(
             createdAt = existing.createdAt,
             updatedAt = now()
         )
-        persist(note)
+        // Checked by affected rows rather than trusting the earlier read: a delete landing between
+        // the lookup and the write would otherwise be silently undone by the write recreating it.
+        if (dao.update(encrypt(note)) == 0) throw NoSuchElementException("Locker note not found")
         return note
     }
 
     suspend fun delete(id: String): Boolean = dao.deleteById(id) > 0
 
-    private suspend fun persist(note: LockerNote) {
+    private fun encrypt(note: LockerNote): LockerNoteEntity {
         val payload = JSONObject()
             .put("title", note.title)
             .put("body", note.body)
             .toString()
         val encrypted = crypto.encrypt(note.id, payload)
-        dao.upsert(
-            LockerNoteEntity(
-                id = note.id,
-                formatVersion = encrypted.formatVersion,
-                contentIv = encrypted.contentIv,
-                ciphertext = encrypted.ciphertext,
-                wrappedKeyIv = encrypted.wrappedKeyIv,
-                wrappedDataKey = encrypted.wrappedDataKey,
-                createdAt = note.createdAt,
-                updatedAt = note.updatedAt
-            )
+        return LockerNoteEntity(
+            id = note.id,
+            formatVersion = encrypted.formatVersion,
+            contentIv = encrypted.contentIv,
+            ciphertext = encrypted.ciphertext,
+            wrappedKeyIv = encrypted.wrappedKeyIv,
+            wrappedDataKey = encrypted.wrappedDataKey,
+            createdAt = note.createdAt,
+            updatedAt = note.updatedAt
         )
     }
 

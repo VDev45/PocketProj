@@ -27,6 +27,7 @@ class PocketProjApplication : Application() {
         LinkRepository(
             dao = database.linkDao(),
             collectionDao = database.collectionDao(),
+            lockerNoteDao = database.lockerNoteDao(),
             fetcher = HttpMetadataFetcher(),
             transactionRunner = TransactionRunner { block -> database.withTransaction(block) },
             enqueuer = MetadataEnqueuer { linkId, _ ->
